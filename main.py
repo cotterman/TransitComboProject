@@ -5,8 +5,9 @@ import urllib2
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
-import matplotlib.pyplot as plt
+print "Version of matplotlib: " , mpl.__version__   #1.4.3
 from mpl_toolkits.basemap import Basemap 
+import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
 
 from collections import namedtuple
@@ -25,23 +26,25 @@ def map_data(fname, route):
     lng0, lng1, lat0, lat1 = [
         min(route.start_lng, route.end_lng) - 0.05, 
         max(route.start_lng, route.end_lng) + 0.05, 
-        min(route.start_lat, route.end_lat) + 0.05, 
-        max(route.start_lat, route.end_lat) - 0.05 
+        min(route.start_lat, route.end_lat) - 0.05, 
+        max(route.start_lat, route.end_lat) + 0.05 
     ]
     
     print "boundaries: ", lng0, lng1, lat0, lat1
     f2, ax2 = plt.subplots(figsize=(10,6))
 
     # Make the map object, where we draw geographic information
-    m = Basemap(lng1, lat0, lng0, lat1, resolution='h', ax=ax2)
+    m = Basemap(lng0, lat0, lng1, lat1, resolution='h', ax=ax2)
     m.drawcoastlines()
 
     # draw parallels.
     parallels = np.arange(lat0,lat1,abs(lat1-lat0)/15.0)
+    print "parallels" , parallels
     m.drawparallels(
         parallels, labels=[1,0,0,0], fontsize=8)
     # draw meridians
     meridians = np.arange(lng0, lng1, abs(lng1-lng0)/15.0)
+    print "meridians" , meridians
     m.drawmeridians(
         meridians, labels=[0,0,0,1], fontsize=8, rotation=25)
 
@@ -50,9 +53,9 @@ def map_data(fname, route):
 
     # Scatter plot of vehicle starts and ends 
     start = m.scatter(route.start_lng, route.start_lat, 
-                       s=3, color='forestgreen', alpha=.5)
+                       s=5, color='forestgreen', alpha=.5)
     end = m.scatter(route.end_lng, route.end_lat,  
-                     s=3, color='darkorchid', alpha=.5)
+                     s=5, color='darkorchid', alpha=.5)
     #ax2.legend((starts, ends), ('Start location', 'End location'),
     #          loc = 'lower right',title="", scatterpoints=1, fontsize=10)
 
@@ -61,7 +64,7 @@ def map_data(fname, route):
     plt.text(route.end_lng, route.end_lat, "end", color='red', fontsize=10)
 
     plt.title('Route',fontsize=16)
-    plt.savefig(fname)
+    plt.savefig('../'+fname)
 
 
 def get_routes(agency_tag):
@@ -111,15 +114,13 @@ def get_distance((lat0, lng0), (lat1, lng1)):
 	distance = alpha*abs(lng1-lng0) + beta*abs(lat1-lat0)
 	return distance
 
-
-def get_best_path(desired_trip, routes_info, routes, X=1):
-	"""Find best path for desired route."""
-
+def rate_routes(desired_trip, routes_info, routes):
+	"""	Create dictionary containing goodness measure for each route."""
 	#for each bus route
 		#find closest stop to start location
 		#find closest stop to end location
 		#calculate total distance on foot/bike using the closest stops. 
-	best_routes = {}
+	routes_ratings = {}
 	min_dist_start = 0
 	min_dist_end = 0
 	for route in routes_info:
@@ -143,40 +144,30 @@ def get_best_path(desired_trip, routes_info, routes, X=1):
 					  closest_stop_to_start, 
 					  closest_stop_to_end, 
 				 	  distance_active)
-		best_routes[route] = best_route
+		routes_ratings[route] = best_route
+	return routes_ratings	
+
+
+def get_best_path(desired_trip, routes_info, routes, X=1):
+	"""Find best path for desired route."""
+
+	#obtain measure of how good each route is, given desired trip
+	routes_ratings = rate_routes(desired_trip, routes_info, routes)	
 
 	#create pandas dataframe containing best X routes
-	indices = best_routes.keys()
-	rtitles = [best_routes[r].title for r in best_routes]
-	closest_stops_to_start = [best_routes[r].start for r in best_routes]
-	closest_stops_to_end = [best_routes[r].end for r in best_routes]
-	distances_active = [best_routes[r].distance_active for r in best_routes]
-	best_routes_df = pd.DataFrame.from_items([
+	indices = routes_ratings.keys()
+	rtitles = [routes_ratings[r].title for r in routes_ratings]
+	closest_stops_to_start = [routes_ratings[r].start for r in routes_ratings]
+	closest_stops_to_end = [routes_ratings[r].end for r in routes_ratings]
+	distances_active = [routes_ratings[r].distance_active for r in routes_ratings]
+	routes_ratings_df = pd.DataFrame.from_items([
 							('rtitle',rtitles),
 							('closest_stop_to_start',closest_stops_to_start),
 							('closest_stop_to_end',closest_stops_to_end),
 							('distance_active',distances_active)])
-	best_routes_df.index = indices
-	best_routes_sorted = best_routes_df.sort_values(by=['distance_active'])
-	best_x_routes = best_routes_sorted[:X]
-
-	if False:
-		#find shortest X distances
-		distances = [best_routes[r].distance_active for r in best_routes]
-		distances.sort()
-		best_distances = distances[:X] #first element is shortest distance
-		print "best_distances" , best_distances
-
-
-
-		#obtain routes corresponding to shortest distances
-		bestX = {k:v for (k,v) in best_routes.items() if v.distance_active <= best_distances[X-1] } 
-
-		#convert to a list of tuples and sort by distance (todo)
-		bestX_sorted = bestX.items()
-		for distance in best_distances:
-			addme = [v for v in best_routes.items() if v.distance_active == distance]
-			bestX_sorted.append(addme)
+	routes_ratings_df.index = indices
+	routes_ratings_sorted = routes_ratings_df.sort_values(by=['distance_active'])
+	best_x_routes = routes_ratings_sorted[:X]
 
 	return best_x_routes
 
@@ -193,7 +184,7 @@ def main():
 	desired_trip = Trip(start_lat, start_lng, end_lat, end_lng)
 
 	#map these locations on map
-	#map_data('desired_route.png', desired_route)
+	map_data('desired_route_2.png', desired_trip)
 
 	#obtain route list containing route tags and titles.
 	routes =  get_routes(agency_tag)
