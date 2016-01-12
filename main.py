@@ -1,6 +1,8 @@
 ################################################################################
 ###################### The Transit Combo Project  ##############################
 ################################################################################
+
+import sys
 import urllib2
 import numpy as np
 import pandas as pd
@@ -9,6 +11,9 @@ print "Version of matplotlib: " , mpl.__version__   #1.4.3
 from mpl_toolkits.basemap import Basemap 
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
+
+sys.path.append('../pygmaps-0.1.1')
+import pygmaps
 
 from collections import OrderedDict
 from collections import namedtuple
@@ -131,7 +136,7 @@ def get_stop_info(agency_tag, routes):
 
 
 def get_droute_info(agency_tag, route_tags, stops_info):
-    directed_route_info = {}
+    directed_route_info = OrderedDict()
     for route_tag in route_tags:
         route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
                   agency_tag + "&r=" + route_tag)
@@ -191,6 +196,46 @@ def find_closest_stops(desired_trip, routes_info, routes):
     return route_stop_ratings
 
 
+def get_muni_path_info(routes_info, route, start_tag, end_tag, return_type): 
+
+    #obtain list of stops to traverse   
+        #(inbetween closest_stop_to_start and closest_stop_to_end)   
+    droute_stop_tags = [stop.tag for stop in routes_info[route]]
+    #print "droute_stop_tags:" , droute_stop_tags, start_tag, end_tag
+    #for now assume each route passes each stop only once
+    start_index = droute_stop_tags.index(start_tag)
+    end_index = droute_stop_tags.index(end_tag)
+    #print "start_index, stop_index" , start_index, end_index
+    if start_index <= end_index:
+        indices = range(start_index, end_index+1)
+    #wrap around list if starting stop is listed before ending stop
+    elif  start_index > end_index:
+        indices = (range(start_index, len(droute_stop_tags)) +
+                   range(0, end_index+1))
+    #print "list of indices " , indices
+    #obtain sum of distances between each stops and also keep track of path
+    muni_distance = 0.
+    path = []
+    droute_stop_lats = [stop.lat for stop in routes_info[route]]
+    droute_stop_lngs = [stop.lng for stop in routes_info[route]]
+    for i, station_index in enumerate(indices):
+        start_loc = (droute_stop_lats[station_index],
+                 droute_stop_lngs[station_index])
+        path.append(start_loc)
+        if i+1 < len(indices):
+            next_index = indices[i+1]
+            #print "station_index, next_index" , station_index, next_index 
+            end_loc = (droute_stop_lats[next_index],
+                         droute_stop_lngs[next_index])
+            dist = get_distance(start_loc, end_loc)
+            #print dist
+            muni_distance += dist
+    if return_type == "distance":
+        return muni_distance
+    elif return_type == "path":
+        return path
+
+
 def get_muni_distance(routes_and_stops, routes_info):
 
     #for each (route, direction, start_stop, end_stop) combo, obtain:
@@ -198,41 +243,11 @@ def get_muni_distance(routes_and_stops, routes_info):
     muni_dist_for_routes = OrderedDict()
     for i_route, route in enumerate(routes_and_stops):
         if True: #route==('21', '21___O_F00'):
-            #obtain list of stops to traverse   
-                #(inbetween closest_stop_to_start and closest_stop_to_end)
-            route_tag = route[0]
-            droute_stop_tags = [stop.tag for stop in routes_info[route]]
             start_tag = routes_and_stops[route].start.tag
-            end_tag = routes_and_stops[route].end.tag
-            #print "droute_stop_tags:" , droute_stop_tags, start_tag, end_tag
-            #for now assume each route passes each stop only once
-            start_index = droute_stop_tags.index(start_tag)
-            end_index = droute_stop_tags.index(end_tag)
-            #print "start_index, stop_index" , start_index, end_index
-            if start_index <= end_index:
-                indices = range(start_index, end_index+1)
-            #wrap around list if starting stop is listed before ending stop
-            elif  start_index > end_index:
-                indices = (range(start_index, len(droute_stop_tags)) +
-                           range(0, end_index+1))
-            #print "list of indices " , indices
-            #obtain sum of distances between each stops
-            muni_distance = 0.
-            droute_stop_lats = [stop.lat for stop in routes_info[route]]
-            droute_stop_lngs = [stop.lat for stop in routes_info[route]]
-            for i, station_index in enumerate(indices):
-                if i+1 < len(indices):
-                    next_index = indices[i+1]
-                    #print "station_index, next_index" , station_index, next_index 
-                    start_loc = (droute_stop_lats[station_index],
-                                 droute_stop_lngs[station_index])
-                    end_loc = (droute_stop_lats[next_index],
-                                 droute_stop_lngs[next_index])
-                    dist = get_distance(start_loc, end_loc)
-                    #print dist
-                    muni_distance += dist
-
-            muni_dist_for_routes[route] = muni_distance
+            end_tag = routes_and_stops[route].end.tag    
+            muni_dist =  get_muni_path_info(routes_info, route, start_tag, 
+                                                end_tag, "distance")
+            muni_dist_for_routes[route] = muni_dist
 
     return muni_dist_for_routes
 
@@ -338,9 +353,9 @@ def main():
 
     #desired Trip consists for start_lat, start_lng, end_lat, end_lng
     start_lat = 37.773972
-    start_lng = -122.431297
-    end_lat =  37.7833
-    end_lng = -122.4167
+    start_lng = -122.451297
+    end_lat =  37.7933
+    end_lng = -122.4067
     desired_trip = Trip(start_lat, start_lng, end_lat, end_lng)
 
     #choose to minimize either time_in_transit or arrival_time
@@ -352,15 +367,6 @@ def main():
 
     #choose number of recommended routes to return
     num_suggestions = 10
-
-    #map these locations on map
-    map_bounds = get_map_boundaries(desired_trip)
-    map = RootMap(map_bounds)
-    map.add_start_loc(start_lat, start_lng)
-    map.add_end_loc(end_lat, end_lng)
-    plt.savefig('../'+"desired_trip")
-
-    #map_data_old('desired_route_2.png', desired_trip)
 
     #obtain route list containing route tags and titles.
     routes =  get_routes(agency_tag)
@@ -377,18 +383,53 @@ def main():
     best_paths = get_best_path(desired_trip, droutes, droutes_info,  
                               objective, active_speed, num_suggestions) 
 
+    #create maps
+    mymap = pygmaps.maps(start_lat, start_lng, 13)
+    #trip start and ends
+    mymap.addpoint(start_lat, start_lng, "#00FF00") #green
+    mymap.addpoint(end_lat, end_lng, "#0000FF") #blue
+    #muni routing
+    if best_paths['miles_muni'][0] > 0:
+        muni_start_lat = best_paths['closest_stop_to_start'][0].lat
+        muni_start_lng = best_paths['closest_stop_to_start'][0].lng
+        muni_end_lat = best_paths['closest_stop_to_end'][0].lat
+        muni_end_lng = best_paths['closest_stop_to_end'][0].lng
+        mymap.addpoint(muni_start_lat, muni_start_lng, "#FF0000")
+        mymap.addpoint(muni_end_lat, muni_end_lng, "#FF0000")
+        #obtain muni path using (route_tag, direction_tag), and stop_tags
+        path = get_muni_path_info(
+                        droutes_info, 
+                        best_paths.index[0], 
+                        best_paths['closest_stop_to_start'][0].tag,
+                        best_paths['closest_stop_to_end'][0].tag,
+                        "path")
+        print "muni path of winner: " , path
+        mymap.addpath(path, "#FF0000")
+
+    mymap.draw('../mymap.html')
+
+    #map_bounds = get_map_boundaries(desired_trip)
+    #map = RootMap(map_bounds)
+    #map.add_start_loc(start_lat, start_lng)
+    #map.add_end_loc(end_lat, end_lng)
+    plt.savefig('../'+"desired_trip")
+
+    #map_data_old('desired_route_2.png', desired_trip)
+
     #map.add_path(best_paths)
-    plt.savefig('../'+"suggest_route")
+    #plt.savefig('../'+"suggest_route")
 
     #features to add:
-        #improve travel times for bus paths
-        #incorporate real-time departure times -- minimize ETAs
+        #improve travel times for bus paths (use google API?)
+        #incorporate real-time departure times to minimize ETAs
+            #See "prediction" section in NextBus documentation
         #allow future trip planning using static bus departure schedule
-        #allow for bus transfers
+            #See "schedule" section in NextBus documentation
         #incorporate BART and caltrain
         #provide map view of suggested route
-        #allow user to enter street address rather than longitude/latitude
-        
+        #allow user to enter street address rather than lng/lat 
+            # http://py-googlemaps.sourceforge.net/ 
+        #allow for transit transfers
 
 if __name__ == '__main__':
     main()
