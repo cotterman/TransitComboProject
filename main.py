@@ -72,6 +72,83 @@ def get_routes(agency_tag):
         routes[rtag] = rtitle
     return routes
 
+def get_droutes(agency_tag):
+    """Returns object containing tag and title of directed routes."""
+
+    agency_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeList&a=" + 
+             agency_tag)
+    result = urllib2.urlopen(agency_page).read()
+    agency_root = ET.fromstring(result)
+    droutes = {}
+    for route in agency_root:
+        rtag = route.get('tag')
+        rtitle = route.get('title')
+        route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
+                      agency_tag + "&r=" + rtag)
+        result = urllib2.urlopen(route_page).read()
+        route_root = ET.fromstring(result)  
+        assert len(route_root)==1
+        route = route_root[0] #get to the child, which has all the route info 
+        for ele in route:
+            if ele.tag == 'direction':
+                rdirections = []
+                dtag = ele.attrib['tag']
+                dtitle = ele.attrib['title']
+                droutes[(rtag,dtag)] = [rtitle, dtitle]
+    return droutes
+
+
+def get_stop_info(agency_tag, routes):
+    """Build map from route_tag/stop_tag to stop info (title and location)."""
+
+    #for each route, obtain pickup/dropoff locations
+    all_stops_info = {}
+    for route_tag in routes:
+        route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
+                      agency_tag + "&r=" + route_tag)
+        result = urllib2.urlopen(route_page).read()
+        route_root = ET.fromstring(result)
+        #route_root has only one child.  
+        assert len(route_root)==1
+        route = route_root[0] #get to the child, which has all the route info.
+        stops_info = {} 
+        #notes on iterators:
+            #iter(route) will just iterate of direct children (not grandchildren).
+            #route.iter() iterates over all descendants in order of doc appearance.
+            #for loop default is to use iter(route), giving direct children only
+        for stop in route:
+            if stop.tag == 'stop':
+                stop_info = Stop(stop.attrib['title'], 
+                            float(stop.attrib['lat']), 
+                            float(stop.attrib['lon']))
+                stop_tag = stop.attrib['tag']
+                all_stops_info[(route_tag, stop_tag)] = stop_info
+
+    return all_stops_info
+
+def get_droute_info(agency_tag, route_tags, stops_info):
+    directed_route_info = {}
+    for route_tag in route_tags:
+        route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
+                  agency_tag + "&r=" + route_tag)
+        result = urllib2.urlopen(route_page).read()
+        route_root = ET.fromstring(result)
+        #route_root has only one child.  
+        assert len(route_root)==1
+        route = route_root[0] #get to the child, which has all the route info 
+        for ele in route:
+            if ele.tag == 'direction':
+                direction_tag = ele.attrib['tag']
+                loc_list = []
+                for stop in ele:
+                    stop_tag = stop.attrib['tag']
+                    stop_info = stops_info[route_tag, stop_tag]
+                    loc_list.append(stop_info)                        
+                directed_route_info[(route_tag, direction_tag)] = loc_list
+
+    return directed_route_info
+
+
 def get_stops_in_route(agency_tag, route_tag):
     route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
                   agency_tag + "&r=" + route_tag)
@@ -97,13 +174,13 @@ def get_stops_in_route(agency_tag, route_tag):
 def get_stops(agency_tag, routes):
 
     #for each route, obtain pickup/dropoff locations
-    locations = {}
+    routes_info = {}
     for route in routes:
-        locations[route] = get_stops_in_route(agency_tag, route)
+        routes_info[route] = get_stops_in_route(agency_tag, route)
     #print "locations: " , locations
     #print "location_dict keys: " , locations.keys()
     #print "location_dict['N']: " , locations['N']
-    return locations
+    return routes_info
     
 
 def get_distance((lat0, lng0), (lat1, lng1)):
@@ -146,28 +223,19 @@ def find_closest_stops(desired_trip, routes_info, routes):
 
 def get_muni_travel_time(agency_tag, routes_and_stops, active_speed):
 
-    #expand each route by number of possible directions for that route
-    for route in routes_and_stops:
-        #print "route: ", route
-        route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
-                      agency_tag + "&r=" + route)
-        result = urllib2.urlopen(route_page).read()
-        route_root = ET.fromstring(result)
-        directions_list = [] 
-        assert len(route_root)==1
-        #for direction in next(iter(route_root)):
-
     #for each (route, direction, start_stop, end_stop) combo, obtain:
-        #arrival time to start_stop (start_stop_arrival_time)
-        #arrival time to end_stop (end_stop_arrival_time)
         #muni_travel_time
         #time_in_transit (=muni_travel_time + active_speed*distance_active)
-        #dest_arrival_time (=end_stop_arrival_time + active_speed*min_dist_end)
+        #toAdd:
+            #arrival time to start_stop (start_stop_arrival_time)
+            #arrival time to end_stop (end_stop_arrival_time)
+            #dest_arrival_time (=end_stop_arrival_time + active_speed*min_dist_end)
+
 
     return routes_and_stops
 
 
-def rate_routes(agency_tag, desired_trip, routes_info, routes, active_speed):
+def rate_routes(agency_tag, desired_trip, routes, routes_info, active_speed):
     """ Create dictionary containing goodness measure for each route."""
     #for each bus route
         #find closest stop to start location
@@ -180,11 +248,11 @@ def rate_routes(agency_tag, desired_trip, routes_info, routes, active_speed):
     return routes_and_travel_times
 
 
-def get_best_path(agency_tag, desired_trip, routes_info, routes, objective, active_speed, X):
+def get_best_path(agency_tag, desired_trip, routes, routes_info, objective, active_speed, X):
     """Find best path for desired route."""
 
     #obtain measure of how good each route is, given desired trip
-    routes_ratings = rate_routes(agency_tag, desired_trip, routes_info, routes, active_speed)   
+    routes_ratings = rate_routes(agency_tag, desired_trip, routes, routes_info, active_speed)   
 
     #create pandas dataframe containing best X routes
     indices = routes_ratings.keys()
@@ -275,17 +343,20 @@ def main():
     #map_data_old('desired_route_2.png', desired_trip)
 
     #obtain route list containing route tags and titles.
-    #routes =  get_routes(agency_tag)
-
-    #obtain possible pick-up/drop-off locations
-        #include associated route title, stop title, stop_lat, stop_lon
-    #routes_info = get_stops(agency_tag, routes)
+    routes =  get_routes(agency_tag)
+    #obtain route/direction list containing tags and titles of each combo
+    droutes = get_droutes(agency_tag)
+    #obtain map from route_tag/stop_tag to stop info (title and location)
+    stops_info = get_stop_info(agency_tag, routes)
+    #obtain (route, direction) combos mapped to info on stops
+    droutes_info = get_droute_info(agency_tag, routes, stops_info)
     
     #return best path (muni route name, direction, start and stop locations)
         #best path has no transfers and minimizes total distance on foot/bike
         #not concerned about time spent on bus (for now)
-    #best_path = get_best_path(agency_tag, desired_trip, routes_info, routes, 
-    #                         objective, active_speed, num_suggestions) 
+    best_path = get_best_path(agency_tag, desired_trip,
+                              droutes, droutes_info,  
+                              objective, active_speed, num_suggestions) 
 
     #map.add_path(path)
     plt.savefig('../'+"suggest_route")
