@@ -10,9 +10,10 @@ from mpl_toolkits.basemap import Basemap
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
 
+from collections import OrderedDict
 from collections import namedtuple
 Trip = namedtuple("Trip", ["start_lat", "start_lng", "end_lat", "end_lng"])
-Stop = namedtuple("Stop", ["title", "lat", "lng"])
+Stop = namedtuple("Stop", ["title", "lat", "lng", "tag"])
 Route = namedtuple("Route", ["title","start","end","distance_active"])
 
 
@@ -72,6 +73,7 @@ def get_routes(agency_tag):
         routes[rtag] = rtitle
     return routes
 
+
 def get_droutes(agency_tag):
     """Returns object containing tag and title of directed routes."""
 
@@ -120,11 +122,13 @@ def get_stop_info(agency_tag, routes):
             if stop.tag == 'stop':
                 stop_info = Stop(stop.attrib['title'], 
                             float(stop.attrib['lat']), 
-                            float(stop.attrib['lon']))
+                            float(stop.attrib['lon']),
+                            stop.attrib['tag'])
                 stop_tag = stop.attrib['tag']
                 all_stops_info[(route_tag, stop_tag)] = stop_info
 
     return all_stops_info
+
 
 def get_droute_info(agency_tag, route_tags, stops_info):
     directed_route_info = {}
@@ -159,7 +163,7 @@ def get_distance((lat0, lng0), (lat1, lng1)):
 
 def find_closest_stops(desired_trip, routes_info, routes):
     """For each route, find closest stops to desired trip."""
-    route_stop_ratings = {}
+    route_stop_ratings = OrderedDict()
     min_dist_start = 0
     min_dist_end = 0
     for route in routes_info:
@@ -187,63 +191,103 @@ def find_closest_stops(desired_trip, routes_info, routes):
     return route_stop_ratings
 
 
-def get_muni_travel_time(agency_tag, routes_and_stops, routes_info, active_speed):
+def get_muni_distance(routes_and_stops, routes_info):
 
     #for each (route, direction, start_stop, end_stop) combo, obtain:
-        #muni_travel_time
-        #time_in_transit (=muni_travel_time + active_speed*distance_active)
-        #toAdd:
-            #arrival time to start_stop (start_stop_arrival_time)
-            #arrival time to end_stop (end_stop_arrival_time)
-            #dest_arrival_time (=end_stop_arrival_time + active_speed*min_dist_end)
+        #distance traveled on muni
+    muni_dist_for_routes = OrderedDict()
     for i_route, route in enumerate(routes_and_stops):
-        #obtain list of stops to traverse   
-            #(inbetween closest_stop_to_start and closest_stop_to_end)
-        if i_route < 2:
-            droute_stops = routes_info[route].values()
-            print doute_stops
+        if True: #route==('21', '21___O_F00'):
+            #obtain list of stops to traverse   
+                #(inbetween closest_stop_to_start and closest_stop_to_end)
+            route_tag = route[0]
+            droute_stop_tags = [stop.tag for stop in routes_info[route]]
+            start_tag = routes_and_stops[route].start.tag
+            end_tag = routes_and_stops[route].end.tag
+            #print "droute_stop_tags:" , droute_stop_tags, start_tag, end_tag
+            #for now assume each route passes each stop only once
+            start_index = droute_stop_tags.index(start_tag)
+            end_index = droute_stop_tags.index(end_tag)
+            #print "start_index, stop_index" , start_index, end_index
+            if start_index <= end_index:
+                indices = range(start_index, end_index+1)
+            #wrap around list if starting stop is listed before ending stop
+            elif  start_index > end_index:
+                indices = (range(start_index, len(droute_stop_tags)) +
+                           range(0, end_index+1))
+            #print "list of indices " , indices
+            #obtain sum of distances between each stops
+            muni_distance = 0.
+            droute_stop_lats = [stop.lat for stop in routes_info[route]]
+            droute_stop_lngs = [stop.lat for stop in routes_info[route]]
+            for i, station_index in enumerate(indices):
+                if i+1 < len(indices):
+                    next_index = indices[i+1]
+                    #print "station_index, next_index" , station_index, next_index 
+                    start_loc = (droute_stop_lats[station_index],
+                                 droute_stop_lngs[station_index])
+                    end_loc = (droute_stop_lats[next_index],
+                                 droute_stop_lngs[next_index])
+                    dist = get_distance(start_loc, end_loc)
+                    #print dist
+                    muni_distance += dist
 
-    return routes_and_stops
+            muni_dist_for_routes[route] = muni_distance
+
+    return muni_dist_for_routes
 
 
-def rate_routes(agency_tag, desired_trip, routes, routes_info, active_speed):
-    """ Create dictionary containing goodness measure for each route."""
+def get_best_path(desired_trip, routes, routes_info, objective, active_speed, X):
+    """Find best path for desired route."""
+
+    #obtain measures of how good each route is, given desired trip
     #for each bus route
         #find closest stop to start location
         #find closest stop to end location
         #calculate total distance on foot/bike using the closest stops.     
-    routes_and_stops = find_closest_stops(desired_trip, routes_info, routes)
-    #get minimum muni travel time for the routes and corresponding stops
-    routes_and_travel_times = get_muni_travel_time(agency_tag, routes_and_stops, 
-                                                   routes_info, active_speed)
-
-    return routes_and_travel_times
-
-
-def get_best_path(agency_tag, desired_trip, routes, routes_info, objective, active_speed, X):
-    """Find best path for desired route."""
-
-    #obtain measure of how good each route is, given desired trip
-    routes_ratings = rate_routes(agency_tag, desired_trip, routes, routes_info, active_speed)   
+    closest_stops = find_closest_stops(desired_trip, routes_info, routes)
+    #get muni travel time for the routes and stops in routes_and_stops
+    muni_dist_for_routes = get_muni_distance(closest_stops, routes_info)
+    #toAdd:
+        #arrival time to start_stop (start_stop_arrival_time)
+        #arrival time to end_stop (end_stop_arrival_time)
+        #dest_arrival_time (=end_stop_arrival_time + active_speed*min_dist_end)
 
     #create pandas dataframe containing best X routes
-    indices = routes_ratings.keys()
-    rtitles = [routes_ratings[r].title for r in routes_ratings]
-    closest_stops_to_start = [routes_ratings[r].start for r in routes_ratings]
-    closest_stops_to_end = [routes_ratings[r].end for r in routes_ratings]
-    distances_active = [routes_ratings[r].distance_active for r in routes_ratings]
-    routes_ratings_df = pd.DataFrame.from_items([
+    indices = closest_stops.keys() + [(None, None)]
+    rtitles = [closest_stops[r].title for r in closest_stops] + [(None, None)]
+    closest_stops_to_start = [closest_stops[r].start for r in closest_stops] + [None]
+    closest_stops_to_end = [closest_stops[r].end for r in closest_stops] + [None]
+    distances_active_noMuni = get_distance((desired_trip.start_lat, 
+                                            desired_trip.start_lng), 
+                                            (desired_trip.end_lat,
+                                            desired_trip.end_lng))
+    travel_time_noMuni = (distances_active_noMuni/active_speed)*60
+    distances_active = ([closest_stops[r].distance_active for r in closest_stops] 
+                        + [distances_active_noMuni])
+    distances_on_muni = [muni_dist_for_routes[r] for r in closest_stops] + [0]
+    routes_ratings = pd.DataFrame.from_items([
                             ('rtitle',rtitles),
                             ('closest_stop_to_start',closest_stops_to_start),
                             ('closest_stop_to_end',closest_stops_to_end),
-                            ('distance_active',distances_active)])
-    routes_ratings_df.index = indices
-    #todo: instead of distance_active, use objective ('time_in_transit' or 'dest_arrival_time')
-    routes_ratings_sorted = routes_ratings_df.sort_values(by=['distance_active'])
+                            ('miles_active',distances_active),
+                            ('miles_muni',distances_on_muni)])
+    routes_ratings.index = indices
+    #add estimated time in transit 
+    muni_speed = 8.
+    routes_ratings['minutes_in_transit'] = (
+        routes_ratings['miles_active']/active_speed +
+        routes_ratings['miles_muni']/muni_speed) * 60
+    #add entry for situation in which no bus is taken
+
+    routes_ratings_sorted = routes_ratings.sort_values(by=['minutes_in_transit'])
     best_x_routes = routes_ratings_sorted[:X]
 
     print "\n ****** We have found the best routes! ********** \n"
     print best_x_routes
+
+    print "Distance of desired trip: " , distances_active_noMuni
+    print "Travel time if using only bike: " , travel_time_noMuni
 
     return best_x_routes
 
@@ -275,6 +319,9 @@ class RootMap:
         end = self.m.scatter(lng, lat, s=5, color='red', alpha=.5)
         plt.text(lng, lat, "end", color='red', fontsize=10)
 
+    #def add_path(self, path)
+
+
 def get_map_boundaries(route):
     lng0, lng1, lat0, lat1 = [
         min(route.start_lng, route.end_lng) - 0.05, 
@@ -283,6 +330,7 @@ def get_map_boundaries(route):
         max(route.start_lat, route.end_lat) + 0.05]
     boundaries =  [lng0, lat0, lng1, lat1]
     return boundaries
+
 
 def main():
 
@@ -296,14 +344,14 @@ def main():
     desired_trip = Trip(start_lat, start_lng, end_lat, end_lng)
 
     #choose to minimize either time_in_transit or arrival_time
-    objective = 'time_in_transit'
+    objective = 'minutes_in_transit'
     #objective = 'dest_arrival_time'
 
     #choose speed of travel when walking or biking (miles/hr) 
-    active_speed = 10
+    active_speed = 4.
 
     #choose number of recommended routes to return
-    num_suggestions = 3
+    num_suggestions = 10
 
     #map these locations on map
     map_bounds = get_map_boundaries(desired_trip)
@@ -326,23 +374,19 @@ def main():
     #return best path (muni route name, direction, start and stop locations)
         #best path has no transfers and minimizes total distance on foot/bike
         #not concerned about time spent on bus (for now)
-    best_path = get_best_path(agency_tag, desired_trip,
-                              droutes, droutes_info,  
+    best_paths = get_best_path(desired_trip, droutes, droutes_info,  
                               objective, active_speed, num_suggestions) 
 
-    #map.add_path(path)
+    #map.add_path(best_paths)
     plt.savefig('../'+"suggest_route")
 
     #features to add:
-        #incorporate travel times for bus paths 
-            #find path that minimizes travel time
-        #incorporate departure times 
-            #find path that minimizes total time (travel + waiting)
+        #improve travel times for bus paths
+        #incorporate real-time departure times -- minimize ETAs
+        #allow future trip planning using static bus departure schedule
         #allow for bus transfers
         #incorporate BART and caltrain
         #provide map view of suggested route
-        #provide best 3 routes with ETAs
-        #allow future trip planning using static bus schedule
         #allow user to enter street address rather than longitude/latitude
         
 
