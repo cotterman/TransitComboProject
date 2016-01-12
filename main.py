@@ -11,9 +11,10 @@ print "Version of matplotlib: " , mpl.__version__   #1.4.3
 from mpl_toolkits.basemap import Basemap 
 import matplotlib.pyplot as plt
 import xml.etree.ElementTree as ET
+import googlemaps #to biking directions and address to lng/at conversion
 
 sys.path.append('../pygmaps-0.1.1')
-import pygmaps
+import pygmaps #for mapping visual
 
 from collections import OrderedDict
 from collections import namedtuple
@@ -299,7 +300,7 @@ def get_best_path(desired_trip, routes, routes_info, objective, active_speed, X)
     best_x_routes = routes_ratings_sorted[:X]
 
     print "\n ****** We have found the best routes! ********** \n"
-    print best_x_routes
+    print best_x_routes , "\n"
 
     print "Distance of desired trip: " , distances_active_noMuni
     print "Travel time if using only bike: " , travel_time_noMuni
@@ -334,8 +335,6 @@ class RootMap:
         end = self.m.scatter(lng, lat, s=5, color='red', alpha=.5)
         plt.text(lng, lat, "end", color='red', fontsize=10)
 
-    #def add_path(self, path)
-
 
 def get_map_boundaries(route):
     lng0, lng1, lat0, lat1 = [
@@ -347,24 +346,99 @@ def get_map_boundaries(route):
     return boundaries
 
 
+def get_path_from_google_dirs(directions):
+    steps = directions[0]['legs'][0]['steps']
+    bike_path = []
+    for i_step, step in enumerate(steps):
+        location = step['start_location']
+        coordinates = (location['lat'], location['lng'])
+        bike_path.append(coordinates)
+        #last round, add end_location
+        if i_step == len(steps)-1:
+            location = step['end_location']
+            coordinates = (location['lat'], location['lng'])
+            bike_path.append(coordinates)    
+    #print "bike_path: " , bike_path
+    return bike_path
+
+
+def draw_path_with_muni(mymap, gmaps, best_paths, droutes_info,
+                        start_lat, start_lng, end_lat, end_lng):
+    print "Suggested muni route is in red."
+    muni_start_lat = best_paths['closest_stop_to_start'][0].lat
+    muni_start_lng = best_paths['closest_stop_to_start'][0].lng
+    muni_end_lat = best_paths['closest_stop_to_end'][0].lat
+    muni_end_lng = best_paths['closest_stop_to_end'][0].lng
+    mymap.addpoint(muni_start_lat, muni_start_lng, "#FF0000")
+    mymap.addpoint(muni_end_lat, muni_end_lng, "#FF0000")
+    #obtain muni path using (route_tag, direction_tag), and stop_tags
+    path = get_muni_path_info(
+                    droutes_info, 
+                    best_paths.index[0], 
+                    best_paths['closest_stop_to_start'][0].tag,
+                    best_paths['closest_stop_to_end'][0].tag,
+                    "path")
+    #print "muni path of winner: " , path
+    mymap.addpath(path, "#FF0000")
+    #biking path
+    print "Suggested bike paths are in green and blue."
+    dirs0 = gmaps.directions((start_lat, start_lng), 
+                            (muni_start_lat, muni_start_lng),
+                            mode='bicycling')
+    bike_path0 = get_path_from_google_dirs(dirs0)
+    mymap.addpath(bike_path0, '#00FF00')
+    dirs1 = gmaps.directions((muni_end_lat, muni_end_lng), 
+                            (end_lat, end_lng),
+                            mode='bicycling')
+    bike_path1 = get_path_from_google_dirs(dirs1)
+    mymap.addpath(bike_path1, '#0000FF')
+
+
+def create_map(gmaps, best_paths, droutes_info, 
+               start_lat, start_lng, end_lat, end_lng):
+    print "\nNow creating map!"
+    mymap = pygmaps.maps(start_lat, start_lng, 13)
+    print "Start location is in green, end location in blue."
+    mymap.addpoint(start_lat, start_lng, "#00FF00") #green
+    mymap.addpoint(end_lat, end_lng, "#0000FF") #blue
+
+    #muni routing
+    if best_paths['miles_muni'][0] > 0:
+        draw_path_with_muni(mymap, gmaps, best_paths, droutes_info, 
+                            start_lat, start_lng, end_lat, end_lng)
+    #if best route is to not take muni, then map bike path from start to end
+    else:
+        dirs = gmaps.directions((start_lat, start_lng), (end_lat, end_lng),
+                                mode='bicycling')
+        bike_path = get_path_from_google_dirs(dirs)
+        mymap.addpath(bike_path, '#00FF00')
+
+    mymap.draw('../mymap.html')
+
+
 def main():
+
+    gmaps = googlemaps.Client(key='AIzaSyAlKIryWGr0hfX45fX3Um-TiOk0yEXy0pA')
 
     agency_tag = "sf-muni"
 
     #desired Trip consists for start_lat, start_lng, end_lat, end_lng
-    start_lat = 37.773972
-    start_lng = -122.451297
-    end_lat =  37.7933
-    end_lng = -122.4067
+    start_lat, start_lng = 37.773972, -122.451297
+    end_lat, end_lng =  37.7933, -122.4067
     desired_trip = Trip(start_lat, start_lng, end_lat, end_lng)
+
+    #address_start = gmaps.reverse_geocode((start_lat, start_lng))
+    #address_end = gmaps.reverse_geocode((end_lat, end_lng))
+    #print "start and end addresses" , address_start, address_end
+    #dirs = gmaps.directions("1117 Montgomery St., San Francisco, CA", 
+    #                        "2300 Harrison St., San Francisco, CA", 
+    #                        mode="bicycling")
 
     #choose to minimize either time_in_transit or arrival_time
     objective = 'minutes_in_transit'
     #objective = 'dest_arrival_time'
-
     #choose speed of travel when walking or biking (miles/hr) 
     active_speed = 4.
-
     #choose number of recommended routes to return
     num_suggestions = 10
 
@@ -378,46 +452,13 @@ def main():
     droutes_info = get_droute_info(agency_tag, routes, stops_info)
     
     #return best path (muni route name, direction, start and stop locations)
-        #best path has no transfers and minimizes total distance on foot/bike
-        #not concerned about time spent on bus (for now)
+        #best path has no transfers and minimizes total travel time
     best_paths = get_best_path(desired_trip, droutes, droutes_info,  
                               objective, active_speed, num_suggestions) 
 
     #create maps
-    mymap = pygmaps.maps(start_lat, start_lng, 13)
-    #trip start and ends
-    mymap.addpoint(start_lat, start_lng, "#00FF00") #green
-    mymap.addpoint(end_lat, end_lng, "#0000FF") #blue
-    #muni routing
-    if best_paths['miles_muni'][0] > 0:
-        muni_start_lat = best_paths['closest_stop_to_start'][0].lat
-        muni_start_lng = best_paths['closest_stop_to_start'][0].lng
-        muni_end_lat = best_paths['closest_stop_to_end'][0].lat
-        muni_end_lng = best_paths['closest_stop_to_end'][0].lng
-        mymap.addpoint(muni_start_lat, muni_start_lng, "#FF0000")
-        mymap.addpoint(muni_end_lat, muni_end_lng, "#FF0000")
-        #obtain muni path using (route_tag, direction_tag), and stop_tags
-        path = get_muni_path_info(
-                        droutes_info, 
-                        best_paths.index[0], 
-                        best_paths['closest_stop_to_start'][0].tag,
-                        best_paths['closest_stop_to_end'][0].tag,
-                        "path")
-        print "muni path of winner: " , path
-        mymap.addpath(path, "#FF0000")
-
-    mymap.draw('../mymap.html')
-
-    #map_bounds = get_map_boundaries(desired_trip)
-    #map = RootMap(map_bounds)
-    #map.add_start_loc(start_lat, start_lng)
-    #map.add_end_loc(end_lat, end_lng)
-    plt.savefig('../'+"desired_trip")
-
-    #map_data_old('desired_route_2.png', desired_trip)
-
-    #map.add_path(best_paths)
-    #plt.savefig('../'+"suggest_route")
+    create_map(gmaps, best_paths, droutes_info, 
+               start_lat, start_lng, end_lat, end_lng)
 
     #features to add:
         #improve travel times for bus paths (use google API?)
@@ -426,6 +467,7 @@ def main():
         #allow future trip planning using static bus departure schedule
             #See "schedule" section in NextBus documentation
         #incorporate BART and caltrain
+        #incorporate city bike share stations.
         #provide map view of suggested route
         #allow user to enter street address rather than lng/lat 
             # http://py-googlemaps.sourceforge.net/ 
