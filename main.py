@@ -147,40 +147,6 @@ def get_droute_info(agency_tag, route_tags, stops_info):
                 directed_route_info[(route_tag, direction_tag)] = loc_list
 
     return directed_route_info
-
-
-def get_stops_in_route(agency_tag, route_tag):
-    route_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeConfig&a=" +
-                  agency_tag + "&r=" + route_tag)
-    result = urllib2.urlopen(route_page).read()
-    route_root = ET.fromstring(result)
-    #route_root has only one child.  
-    assert len(route_root)==1
-    route = route_root[0] #get to the child, which has all the route info.
-    loc_list = [] 
-    #notes on iterators:
-        #iter(route) will just iterate of direct children (not grandchildren).
-        #route.iter() iterates over all descendants in order of doc appearance.
-        #for loop default is to use iter(route), giving direct children only
-    for stop in route:
-        if stop.tag == 'stop':
-            stop = Stop(stop.attrib['title'], 
-                        float(stop.attrib['lat']), 
-                        float(stop.attrib['lon']))
-            loc_list.append(stop)
-            #print "location: " , location
-    return loc_list
-
-def get_stops(agency_tag, routes):
-
-    #for each route, obtain pickup/dropoff locations
-    routes_info = {}
-    for route in routes:
-        routes_info[route] = get_stops_in_route(agency_tag, route)
-    #print "locations: " , locations
-    #print "location_dict keys: " , locations.keys()
-    #print "location_dict['N']: " , locations['N']
-    return routes_info
     
 
 def get_distance((lat0, lng0), (lat1, lng1)):
@@ -221,7 +187,7 @@ def find_closest_stops(desired_trip, routes_info, routes):
     return route_stop_ratings
 
 
-def get_muni_travel_time(agency_tag, routes_and_stops, active_speed):
+def get_muni_travel_time(agency_tag, routes_and_stops, routes_info, active_speed):
 
     #for each (route, direction, start_stop, end_stop) combo, obtain:
         #muni_travel_time
@@ -230,7 +196,12 @@ def get_muni_travel_time(agency_tag, routes_and_stops, active_speed):
             #arrival time to start_stop (start_stop_arrival_time)
             #arrival time to end_stop (end_stop_arrival_time)
             #dest_arrival_time (=end_stop_arrival_time + active_speed*min_dist_end)
-
+    for i_route, route in enumerate(routes_and_stops):
+        #obtain list of stops to traverse   
+            #(inbetween closest_stop_to_start and closest_stop_to_end)
+        if i_route < 2:
+            droute_stops = routes_info[route].values()
+            print doute_stops
 
     return routes_and_stops
 
@@ -243,7 +214,8 @@ def rate_routes(agency_tag, desired_trip, routes, routes_info, active_speed):
         #calculate total distance on foot/bike using the closest stops.     
     routes_and_stops = find_closest_stops(desired_trip, routes_info, routes)
     #get minimum muni travel time for the routes and corresponding stops
-    routes_and_travel_times = get_muni_travel_time(agency_tag, routes_and_stops, active_speed)
+    routes_and_travel_times = get_muni_travel_time(agency_tag, routes_and_stops, 
+                                                   routes_info, active_speed)
 
     return routes_and_travel_times
 
@@ -371,6 +343,7 @@ def main():
         #provide map view of suggested route
         #provide best 3 routes with ETAs
         #allow future trip planning using static bus schedule
+        #allow user to enter street address rather than longitude/latitude
         
 
 if __name__ == '__main__':
