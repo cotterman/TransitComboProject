@@ -4,20 +4,21 @@
 
 import sys
 import urllib2
+from collections import OrderedDict
+from collections import namedtuple
+import xml.etree.ElementTree as ET
+
 import numpy as np
 import pandas as pd
 import matplotlib as mpl
 print "Version of matplotlib: " , mpl.__version__   #1.4.3
 from mpl_toolkits.basemap import Basemap 
 import matplotlib.pyplot as plt
-import xml.etree.ElementTree as ET
-import googlemaps #to biking directions and address to lng/at conversion
 
+import googlemaps #to biking directions and address to lng/at conversion
 sys.path.append('../pygmaps-0.1.1')
 import pygmaps #for mapping visual
 
-from collections import OrderedDict
-from collections import namedtuple
 Trip = namedtuple("Trip", ["start_lat", "start_lng", "end_lat", "end_lng"])
 Stop = namedtuple("Stop", ["title", "lat", "lng", "tag"])
 Route = namedtuple("Route", ["title","start","end","distance_active"])
@@ -80,7 +81,7 @@ def get_routes(agency_tag):
     return routes
 
 
-def get_droutes(agency_tag):
+def get_directed_routes(agency_tag):
     """Returns object containing tag and title of directed routes."""
 
     agency_page = ("http://webservices.nextbus.com/service/publicXMLFeed?command=routeList&a=" + 
@@ -426,13 +427,13 @@ def main():
     start_lat, start_lng = 37.773972, -122.451297
     end_lat, end_lng =  37.7933, -122.4067
     desired_trip = Trip(start_lat, start_lng, end_lat, end_lng)
-
     #address_start = gmaps.reverse_geocode((start_lat, start_lng))
     #address_end = gmaps.reverse_geocode((end_lat, end_lng))
     #print "start and end addresses" , address_start, address_end
     #dirs = gmaps.directions("1117 Montgomery St., San Francisco, CA", 
     #                        "2300 Harrison St., San Francisco, CA", 
     #                        mode="bicycling")
+    #290 De Haro St, San Francisco, CA 94103, USA
 
     #choose to minimize either time_in_transit or arrival_time
     objective = 'minutes_in_transit'
@@ -445,17 +446,15 @@ def main():
     #obtain route list containing route tags and titles.
     routes =  get_routes(agency_tag)
     #obtain route/direction list containing tags and titles of each combo
-    droutes = get_droutes(agency_tag)
+    droutes = get_directed_routes(agency_tag)
     #obtain map from route_tag/stop_tag to stop info (title and location)
     stops_info = get_stop_info(agency_tag, routes)
     #obtain (route, direction) combos mapped to info on stops
-    droutes_info = get_droute_info(agency_tag, routes, stops_info)
-    
+    droutes_info = get_droute_info(agency_tag, routes, stops_info)   
     #return best path (muni route name, direction, start and stop locations)
         #best path has no transfers and minimizes total travel time
     best_paths = get_best_path(desired_trip, droutes, droutes_info,  
                               objective, active_speed, num_suggestions) 
-
     #create maps
     create_map(gmaps, best_paths, droutes_info, 
                start_lat, start_lng, end_lat, end_lng)
@@ -468,7 +467,7 @@ def main():
             #See "schedule" section in NextBus documentation
         #incorporate BART and caltrain
         #incorporate city bike share stations.
-        #provide map view of suggested route
+        #improve map view of suggested route (labels, precise bus path)
         #allow user to enter street address rather than lng/lat 
             # http://py-googlemaps.sourceforge.net/ 
         #allow for transit transfers
